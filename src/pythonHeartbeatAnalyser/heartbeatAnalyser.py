@@ -6,9 +6,7 @@ class videoStream():
     self.video_stream = cv2.VideoCapture(filepath)
     self.frame_width = self.video_stream.get(cv2.CAP_PROP_FRAME_WIDTH)
     self.frame_height = self.video_stream.get(cv2.CAP_PROP_FRAME_HEIGHT)
-    self.cascPath = "haarcascade_frontalface_default.xml"
     self.users = {}
-    self.face_cascade = cv2.CascadeClassifier(self.cascPath)
     self.face_rects = []
     self.fps = self.video_stream.get(cv2.CAP_PROP_FPS)
 
@@ -52,13 +50,6 @@ class videoStream():
     cv2.destroyAllWindows()
 
   def detect_faces(self, frame):
-    # gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    # face_rects = self.face_cascade.detectMultiScale(
-    #   image = gray,
-    #   scaleFactor = 1.4,
-    #   minNeighbors = 5,
-    #   minSize = (30,30)
-    # )
     conf_threshold = 0.8
     blob = cv2.dnn.blobFromImage(frame, 1.0, (300, 300), [104, 117, 123], False, False)
     self.net.setInput(blob)
