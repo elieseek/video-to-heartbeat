@@ -1,5 +1,6 @@
 *.xml
 *.pb
-*.pbtext
-*.prototext
+*.pbtxt
+*.prototxt
 *.caffemodel
+*.DS_STORE
