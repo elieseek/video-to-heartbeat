@@ -5,6 +5,7 @@ class videoStream():
   def __init__(self, filepath):
     self.video_stream = cv2.VideoCapture(filepath)
     self.cascPath = "haarcascade_frontalface_default.xml"
+    self.users = {}
     self.face_cascade = cv2.CascadeClassifier(self.cascPath)
     self.face_rects = []
     self.fps = self.video_stream.get(cv2.CAP_PROP_FPS)
@@ -40,7 +41,7 @@ class videoStream():
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     face_rects = self.face_cascade.detectMultiScale(
       image = gray,
-      scaleFactor = 1.1,
+      scaleFactor = 1.15,
       minNeighbors = 4,
       minSize = (30,30)
     )
@@ -48,7 +49,11 @@ class videoStream():
 
   def draw_face_rects(self, frame, faces):
     for (x, y, w, h) in faces:
-      cv2.rectangle(frame, (int(0.25*w)+x, int(0.05*h)+y), (x+int(0.75*w), y+int(0.35*h)), (0, 255, 0), 2)
+      small_bot = (int(0.45*w)+x, int(0.05*h)+y)
+      small_top = (x+int(0.55*w), y+int(0.15*h))
+      self.update_users((x, y, w, h), small_bot, small_top)
+      cv2.rectangle(frame, small_bot, small_top, (0, 255, 0), 2)
+      cv2.rectangle(frame, (x,y), (x+w,y+h), (0, 0, 255), 2)
     return frame
 
   def crop_faces(self, frame, faces):
@@ -73,6 +78,30 @@ class videoStream():
       face_rect = self.face_rects[i]
       self.draw_text(frame, str(face.mean()), (face_rect[0],face_rect[1]), face_rect[2])
       i += 1
-      
+
+  def update_users(self, face_rect, rect_bot, rect_top):
+    rect_centre = (int((rect_bot[0]+rect_top[0])/2), int((rect_bot[1]+rect_top[1])/2))
+    cropped_rect = self.frame[rect_bot[1]:rect_top[1], rect_bot[0]:rect_top[0]]
+    for key, values in self.users.copy().items():
+      self.draw_text(self.frame, str(values['colour_hstry']), (face_rect[0]+50,face_rect[1]+50), 100)
+      if (values['frame'][0] < rect_centre[0] < values['frame'][0]+values['frame'][2]) and (values['frame'][1] <rect_centre[1] < values['frame'][1] + values['frame'][3]):
+        self.users[key]['frame'] = face_rect
+        self.users[key]['colour_hstry'] = self.update_colour_hstry(self.users[key]['colour_hstry'], cropped_rect.mean())
+        self.users[key]['frames_since_update'] = 0
+        return 0
+
+    max_key = max(list(self.users.keys())) if (len(self.users) != 0) else 0
+    self.users[max_key] = {'frame': face_rect, 'colour_hstry': [0 for _ in range(int(self.fps*3))], 'frames_since_update': 0}
+
+  def update_colour_hstry(self, history, mean):
+    if history[int(self.fps*3)-1] == 0:
+      index = history.index(0)
+      history.remove(0)
+      history.insert(index, mean)
+    else:
+      history.pop(0)
+      history.append(mean)
+    return history
+
 if __name__ == '__main__':
   stream = videoStream(0)
