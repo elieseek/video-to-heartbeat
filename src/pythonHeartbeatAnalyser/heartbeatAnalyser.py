@@ -15,9 +15,13 @@ class videoStream():
     frame_count = 0
     while True:
       ret, self.frame = self.video_stream.read()
+      if self.frame is None:
+        break
+      self.frame = cv2.resize(self.frame, (0,0), fx=0.75, fy=0.75) 
+
+      self.age_users_dict()
 
       self.face_rects = self.detect_faces(self.frame)
-
       if len(self.face_rects) > 0:
         cropped_faces = self.crop_faces(self.frame, self.face_rects)
         self.frame = self.draw_face_rects(self.frame, self.face_rects)
@@ -41,8 +45,8 @@ class videoStream():
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     face_rects = self.face_cascade.detectMultiScale(
       image = gray,
-      scaleFactor = 1.15,
-      minNeighbors = 4,
+      scaleFactor = 1.4,
+      minNeighbors = 5,
       minSize = (30,30)
     )
     return face_rects
@@ -53,7 +57,6 @@ class videoStream():
       small_top = (x+int(0.55*w), y+int(0.15*h))
       self.update_users((x, y, w, h), small_bot, small_top)
       cv2.rectangle(frame, small_bot, small_top, (0, 255, 0), 2)
-      cv2.rectangle(frame, (x,y), (x+w,y+h), (0, 0, 255), 2)
     return frame
 
   def crop_faces(self, frame, faces):
@@ -80,18 +83,29 @@ class videoStream():
       i += 1
 
   def update_users(self, face_rect, rect_bot, rect_top):
-    rect_centre = (int((rect_bot[0]+rect_top[0])/2), int((rect_bot[1]+rect_top[1])/2))
+    rect_centre = (int((2*face_rect[0]+face_rect[2])/2), int((2*face_rect[1]+face_rect[3])/2))
     cropped_rect = self.frame[rect_bot[1]:rect_top[1], rect_bot[0]:rect_top[0]]
+    cv2.circle(self.frame, rect_centre,1, (0, 0, 255), 2)
+    cv2.rectangle(self.frame, (face_rect[0],face_rect[1]), (face_rect[0]+face_rect[2], face_rect[1]+face_rect[3]), (0, 0, 255), 2)
     for key, values in self.users.copy().items():
-      self.draw_text(self.frame, str(values['colour_hstry']), (face_rect[0]+50,face_rect[1]+50), 100)
-      if (values['frame'][0] < rect_centre[0] < values['frame'][0]+values['frame'][2]) and (values['frame'][1] <rect_centre[1] < values['frame'][1] + values['frame'][3]):
+      if (values['frame'][0] < rect_centre[0] and rect_centre[0] < values['frame'][0]+values['frame'][2]) and (values['frame'][1] <rect_centre[1] and rect_centre[1] < values['frame'][1] + values['frame'][3]):
+        self.draw_text(self.frame, str(key), rect_centre, 100)
         self.users[key]['frame'] = face_rect
         self.users[key]['colour_hstry'] = self.update_colour_hstry(self.users[key]['colour_hstry'], cropped_rect.mean())
         self.users[key]['frames_since_update'] = 0
         return 0
 
-    max_key = max(list(self.users.keys())) if (len(self.users) != 0) else 0
+    max_key = max(list(self.users.keys()))+1 if (len(self.users) != 0) else 0
     self.users[max_key] = {'frame': face_rect, 'colour_hstry': [0 for _ in range(int(self.fps*3))], 'frames_since_update': 0}
+
+  def age_users_dict(self):
+    aged_users = []
+    for key, values in self.users.copy().items():
+      self.users[key]['frames_since_update'] += 1
+      if self.users[key]['frames_since_update'] >= int(self.fps/2):
+        aged_users.append(key)
+    for key in aged_users:
+      del self.users[key]
 
   def update_colour_hstry(self, history, mean):
     if history[int(self.fps*3)-1] == 0:
