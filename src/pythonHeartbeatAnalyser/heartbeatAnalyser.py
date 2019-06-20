@@ -2,13 +2,24 @@ import numpy as np
 import cv2
 
 class videoStream():
-  def __init__(self, filepath):
+  def __init__(self, filepath, DNN):
     self.video_stream = cv2.VideoCapture(filepath)
+    self.frame_width = self.video_stream.get(cv2.CAP_PROP_FRAME_WIDTH)
+    self.frame_height = self.video_stream.get(cv2.CAP_PROP_FRAME_HEIGHT)
     self.cascPath = "haarcascade_frontalface_default.xml"
     self.users = {}
     self.face_cascade = cv2.CascadeClassifier(self.cascPath)
     self.face_rects = []
     self.fps = self.video_stream.get(cv2.CAP_PROP_FPS)
+
+    if DNN == "CAFFE":
+        modelFile = "res10_300x300_ssd_iter_140000_fp16.caffemodel"
+        configFile = "deploy.prototxt"
+        self.net = cv2.dnn.readNetFromCaffe(configFile, modelFile)
+    else:
+        modelFile = "opencv_face_detector_uint8.pb"
+        configFile = "opencv_face_detector.pbtxt"
+        self.net = cv2.dnn.readNetFromTensorflow(modelFile, configFile)
     self.open_video_stream()
 
   def open_video_stream(self):
@@ -17,7 +28,6 @@ class videoStream():
       ret, self.frame = self.video_stream.read()
       if self.frame is None:
         break
-      self.frame = cv2.resize(self.frame, (0,0), fx=0.75, fy=0.75) 
 
       self.age_users_dict()
 
@@ -42,13 +52,26 @@ class videoStream():
     cv2.destroyAllWindows()
 
   def detect_faces(self, frame):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    face_rects = self.face_cascade.detectMultiScale(
-      image = gray,
-      scaleFactor = 1.4,
-      minNeighbors = 5,
-      minSize = (30,30)
-    )
+    # gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    # face_rects = self.face_cascade.detectMultiScale(
+    #   image = gray,
+    #   scaleFactor = 1.4,
+    #   minNeighbors = 5,
+    #   minSize = (30,30)
+    # )
+    conf_threshold = 0.8
+    blob = cv2.dnn.blobFromImage(frame, 1.0, (300, 300), [104, 117, 123], False, False)
+    self.net.setInput(blob)
+    detections = self.net.forward()
+    face_rects = []
+    for i in range(detections.shape[2]):
+        confidence = detections[0, 0, i, 2]
+        if confidence > conf_threshold:
+            x1 = int(detections[0, 0, i, 3] * self.frame_width)
+            y1 = int(detections[0, 0, i, 4] * self.frame_height)
+            x2 = int(detections[0, 0, i, 5] * self.frame_width)
+            y2 = int(detections[0, 0, i, 6] * self.frame_height)
+            face_rects.append((x1, y1, x2-x1, y2-y1))
     return face_rects
 
   def draw_face_rects(self, frame, faces):
@@ -67,9 +90,9 @@ class videoStream():
     return cropped_faces
 
   def draw_text(self, frame, text, coords, size):
-    cv2.putText(frame, text, 
-      coords, 
-      cv2.FONT_HERSHEY_SIMPLEX, 
+    cv2.putText(frame, text,
+      coords,
+      cv2.FONT_HERSHEY_SIMPLEX,
       size/200,
       (255,255,255),
       2
@@ -118,4 +141,4 @@ class videoStream():
     return history
 
 if __name__ == '__main__':
-  stream = videoStream(0)
+  stream = videoStream(0, 'TF')
