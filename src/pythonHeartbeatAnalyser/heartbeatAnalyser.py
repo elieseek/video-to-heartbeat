@@ -131,5 +131,20 @@ class videoStream():
       history.append(mean)
     return history
 
+def apply_bandpass(spectrum, sample_rate, high, low):
+    n = spectrum.size
+    high = high/sample_rate * n/2
+    low = low/sample_rate * n/2
+    filtered_signal = signal.copy()
+    filtered_spectrum = [spectrum[i] if i >= low and i <= high else 0.0 for i in range(n)]
+    return filtered_spectrum
+
+def analyse_signal(signal, sample_rate):
+    coefs = np.fft.rfft(signal)
+    freqs = np.fft.rfftfreq(signal.size, d=1./sample_rate)
+
+    filtered_spectrum = apply_bandpass(coefs, sample_rate, high=1.2, low=0.8)
+    filtered_signal = np.irfft(filtered_spectrum, signal.size)
+
 if __name__ == '__main__':
   stream = videoStream(0, 'TF')
