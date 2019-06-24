@@ -110,7 +110,7 @@ class videoStream():
         return 0
 
     max_key = max(list(self.users.keys()))+1 if (len(self.users) != 0) else 0
-    self.users[max_key] = {'frame': face_rect, 'colour_hstry': [0 for _ in range(int(self.fps*3))], 'frames_since_update': 0}
+    self.users[max_key] = {'frame': face_rect, 'colour_hstry': [0 for _ in range(int(self.fps*3))], 'frames_since_update': 0, 'filtered_signal': [0 for _ in range(int(self.fps*3))]}
 
   def age_users_dict(self):
     aged_users = []
@@ -131,6 +131,12 @@ class videoStream():
       history.append(mean)
     return history
 
+  def filter_user_signals(self):
+    for user in self.users.keys():
+      raw_signal = self.users[user]['colour_hstry']
+      if raw_signal[-1] != 0:
+        self.users[user]['filtered_signal'] = filter_signal(raw_signal, self.fps)
+
 def apply_bandpass(spectrum, sample_rate, high, low):
     n = spectrum.size
     high = high/sample_rate * n/2
@@ -139,7 +145,7 @@ def apply_bandpass(spectrum, sample_rate, high, low):
     filtered_spectrum = [spectrum[i] if i >= low and i <= high else 0.0 for i in range(n)]
     return filtered_spectrum
 
-def analyse_signal(signal, sample_rate):
+def filter_signal(signal, sample_rate):
     coefs = np.fft.rfft(signal)
     freqs = np.fft.rfftfreq(signal.size, d=1./sample_rate)
 
