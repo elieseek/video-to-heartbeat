@@ -37,6 +37,7 @@ class videoStream():
       self.draw_text(self.frame, str(frame_count), (100,100), 100)
       cv2.imshow('frame', self.frame)
 
+      self.filter_user_signals()
 
       if cv2.waitKey(1) & 0xFF == ord('q'):
         break
@@ -110,7 +111,7 @@ class videoStream():
         return 0
 
     max_key = max(list(self.users.keys()))+1 if (len(self.users) != 0) else 0
-    self.users[max_key] = {'frame': face_rect, 'colour_hstry': [0 for _ in range(int(self.fps*3))], 'frames_since_update': 0, 'filtered_signal': [0 for _ in range(int(self.fps*3))]}
+    self.users[max_key] = {'frame': face_rect, 'colour_hstry': [0 for _ in range(int(self.fps*3))], 'frames_since_update': 0, 'filtered_spectrum': [0 for _ in range(int(self.fps*3))], 'bpm': 0}
 
   def age_users_dict(self):
     aged_users = []
@@ -135,7 +136,16 @@ class videoStream():
     for user in self.users.keys():
       raw_signal = self.users[user]['colour_hstry']
       if raw_signal[-1] != 0:
-        self.users[user]['filtered_signal'] = filter_signal(raw_signal, self.fps)
+       filtered_signal, filtered_spectrum, coefs, freqs = filter_signal(raw_signal, self.fps)
+       self.users['filtered_spectrum'] = filtered_spectrum
+       self.users['bpm'] = self.extract_heartbeat(filtered_spectrum, freqs)
+
+  def extract_heartbeat(self, spectrum, frequencies):
+    max_index = np.argmax(np.abs(spectrum))
+    max_freq = frequencies[max_index]
+    max_freq_hz = np.abs(max_freq * self.fps)
+    max_freq_bpm = max_freq_hz * 60
+    return max_freq_bpm
 
 def apply_bandpass(spectrum, sample_rate, high, low):
     n = spectrum.size
@@ -151,7 +161,7 @@ def filter_signal(signal, sample_rate):
 
     filtered_spectrum = apply_bandpass(coefs, sample_rate, high=1.2, low=0.8)
     filtered_signal = np.irfft(filtered_spectrum, signal.size)
-    return filtered_signal, filtered_spectrum
+    return filtered_signal, filtered_spectrum, coefs, freqs
 
 if __name__ == '__main__':
   stream = videoStream(0, 'TF')
