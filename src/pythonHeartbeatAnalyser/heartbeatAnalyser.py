@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.signal import butter, lfilter
 import cv2
 
 class videoStream():
@@ -68,8 +69,10 @@ class videoStream():
 
   def draw_face_rects(self, frame, faces):
     for (x, y, w, h) in faces:
-      small_bot = (int(0.45*w)+x, int(0.05*h)+y)
-      small_top = (x+int(0.55*w), y+int(0.15*h))
+      # small_bot = (int(0.45*w)+x, int(0.05*h)+y)
+      # small_top = (x+int(0.55*w), y+int(0.15*h))
+      small_bot = (int(0.35*w)+x, int(0.05*h)+y)
+      small_top = (x+int(0.65*w), y+int(0.25*h))
       self.update_users((x, y, w, h), small_bot, small_top)
       cv2.rectangle(frame, small_bot, small_top, (0, 255, 0), 2)
     return frame
@@ -94,24 +97,29 @@ class videoStream():
     i = 0
     for face in faces:
       face_rect = self.face_rects[i]
-      self.draw_text(frame, str(face.mean()), (face_rect[0],face_rect[1]), face_rect[2])
+     #self.draw_text(frame, str(self.extract_mean_hue(face)), (face_rect[0],face_rect[1]), face_rect[2])
       i += 1
 
+  def get_rect_centre(self, rect):
+    return (int((2*rect[0]+rect[2])/2), int((2*rect[1]+rect[3])/2))
+
   def update_users(self, face_rect, rect_bot, rect_top):
-    rect_centre = (int((2*face_rect[0]+face_rect[2])/2), int((2*face_rect[1]+face_rect[3])/2))
+    rect_centre = self.get_rect_centre(face_rect)
     cropped_rect = self.frame[rect_bot[1]:rect_top[1], rect_bot[0]:rect_top[0]]
     cv2.circle(self.frame, rect_centre,1, (0, 0, 255), 2)
     cv2.rectangle(self.frame, (face_rect[0],face_rect[1]), (face_rect[0]+face_rect[2], face_rect[1]+face_rect[3]), (0, 0, 255), 2)
     for key, values in self.users.copy().items():
       if (values['frame'][0] < rect_centre[0] and rect_centre[0] < values['frame'][0]+values['frame'][2]) and (values['frame'][1] <rect_centre[1] and rect_centre[1] < values['frame'][1] + values['frame'][3]):
         self.draw_text(self.frame, str(key), rect_centre, 100)
+        self.draw_text(self.frame, str(values['bpm']), (face_rect[0],face_rect[1]), face_rect[2])
+        self.draw_text(self.frame, str(values['max_amp']), (face_rect[0]+face_rect[2], face_rect[1]+face_rect[3]), face_rect[2])
         self.users[key]['frame'] = face_rect
-        self.users[key]['colour_hstry'] = self.update_colour_hstry(self.users[key]['colour_hstry'], cropped_rect.mean())
+        self.users[key]['colour_hstry'] = self.update_colour_hstry(self.users[key]['colour_hstry'], self.extract_mean_hue(cropped_rect))
         self.users[key]['frames_since_update'] = 0
         return 0
 
     max_key = max(list(self.users.keys()))+1 if (len(self.users) != 0) else 0
-    self.users[max_key] = {'frame': face_rect, 'colour_hstry': [0 for _ in range(int(self.fps*3))], 'frames_since_update': 0, 'filtered_spectrum': [0 for _ in range(int(self.fps*3))], 'bpm': 0}
+    self.users[max_key] = {'frame': face_rect, 'colour_hstry': [0 for _ in range(int(self.fps*5))], 'frames_since_update': 0, 'filtered_spectrum': [0 for _ in range(int(self.fps*5))], 'bpm': 'calculating bpm', 'max_amp': '-'}
 
   def age_users_dict(self):
     aged_users = []
@@ -123,7 +131,7 @@ class videoStream():
       del self.users[key]
 
   def update_colour_hstry(self, history, mean):
-    if history[int(self.fps*3)-1] == 0:
+    if history[int(self.fps*5)-1] == 0:
       index = history.index(0)
       history.remove(0)
       history.insert(index, mean)
@@ -133,35 +141,60 @@ class videoStream():
     return history
 
   def filter_user_signals(self):
-    for user in self.users.keys():
-      raw_signal = self.users[user]['colour_hstry']
+    for key, values in self.users.copy().items():
+      raw_signal = self.users[key]['colour_hstry']
       if raw_signal[-1] != 0:
-       filtered_signal, filtered_spectrum, coefs, freqs = filter_signal(raw_signal, self.fps)
-       self.users['filtered_spectrum'] = filtered_spectrum
-       self.users['bpm'] = self.extract_heartbeat(filtered_spectrum, freqs)
+        face_centre = self.get_rect_centre(values['frame'])
+        # filtered_signal, filtered_spectrum, coefs, freqs = filter_signal(np.array(raw_signal), self.fps)
+        filtered_signal = butter_bandpass_filter(np.array(raw_signal), 0.8, 2.5, self.fps, order=5)
+        self.users[key]['bpm'], self.users[key]['max_amp'] = self.extract_heartbeat(np.fft.fft(filtered_signal), np.fft.fftfreq(filtered_signal.size, 1/self.fps))
+        # self.users[key]['bpm'], self.users[key]['max_amp'] = self.extract_heartbeat(filtered_spectrum, freqs)
+
 
   def extract_heartbeat(self, spectrum, frequencies):
-    max_index = np.argmax(np.abs(spectrum))
-    max_freq = frequencies[max_index]
-    max_freq_hz = np.abs(max_freq * self.fps)
+    max_index = np.abs(np.argmax(np.abs(spectrum)))
+
+    max_freq = np.abs(frequencies[max_index])
+    max_amp = np.abs(spectrum[max_index])
+
+    max_freq_hz = max_freq
     max_freq_bpm = max_freq_hz * 60
-    return max_freq_bpm
+    return max_freq_bpm, max_amp
 
-def apply_bandpass(spectrum, sample_rate, high, low):
-    n = spectrum.size
-    high = high/sample_rate * n/2
-    low = low/sample_rate * n/2
-    filtered_signal = signal.copy()
-    filtered_spectrum = [spectrum[i] if i >= low and i <= high else 0.0 for i in range(n)]
-    return filtered_spectrum
+  def extract_mean_hue(self, frame):
+    hsv_img = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    hsv_img = cv2.medianBlur(hsv_img,9)   
+    h, s, v = hsv_img[:, :, 0], hsv_img[:, :, 1], hsv_img[:, :, 2]
+    return np.mean(s)
 
-def filter_signal(signal, sample_rate):
-    coefs = np.fft.rfft(signal)
-    freqs = np.fft.rfftfreq(signal.size, d=1./sample_rate)
+# def apply_bandpass(spectrum, sample_rate, high, low):
+#     n = spectrum.size
+#     high = high/sample_rate * n
+#     low = low/sample_rate * n
+#     filtered_signal = spectrum.copy()
+#     filtered_spectrum = [spectrum[i] if i >= low and i <= high else 0.0 for i in range(n)]
+#     return filtered_spectrum
 
-    filtered_spectrum = apply_bandpass(coefs, sample_rate, high=1.2, low=0.8)
-    filtered_signal = np.irfft(filtered_spectrum, signal.size)
-    return filtered_signal, filtered_spectrum, coefs, freqs
+# def filter_signal(signal, sample_rate):
+#     coefs = np.fft.fft(signal)
+#     freqs = np.fft.fftfreq(signal.size, d=1./sample_rate)
+
+#     filtered_spectrum = apply_bandpass(coefs, sample_rate, high=2.5, low=0.8)
+#     filtered_signal = np.fft.ifft(filtered_spectrum, signal.size)
+#     return filtered_signal, filtered_spectrum, coefs, freqs
+
+def butter_bandpass(lowcut, highcut, fs, order=5):
+    nyq = 0.5 * fs
+    low = lowcut / nyq
+    high = highcut / nyq
+    b, a = butter(order, [low, high], btype='band')
+    return b, a
+
+
+def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
+    b, a = butter_bandpass(lowcut, highcut, fs, order=order)
+    y = lfilter(b, a, data)
+    return y
 
 if __name__ == '__main__':
   stream = videoStream(0, 'TF')
