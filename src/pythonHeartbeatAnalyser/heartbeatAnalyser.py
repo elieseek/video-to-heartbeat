@@ -151,6 +151,7 @@ def filter_signal(signal, sample_rate):
 
     filtered_spectrum = apply_bandpass(coefs, sample_rate, high=1.2, low=0.8)
     filtered_signal = np.irfft(filtered_spectrum, signal.size)
+    return filtered_signal, filtered_spectrum
 
 if __name__ == '__main__':
   stream = videoStream(0, 'TF')
