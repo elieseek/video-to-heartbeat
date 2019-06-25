@@ -69,10 +69,10 @@ class videoStream():
 
   def draw_face_rects(self, frame, faces):
     for (x, y, w, h) in faces:
-      # small_bot = (int(0.45*w)+x, int(0.05*h)+y)
-      # small_top = (x+int(0.55*w), y+int(0.15*h))
-      small_bot = (int(0.35*w)+x, int(0.05*h)+y)
-      small_top = (x+int(0.65*w), y+int(0.25*h))
+      small_bot = (int(0.45*w)+x, int(0.05*h)+y)
+      small_top = (x+int(0.55*w), y+int(0.15*h))
+      #small_bot = (int(0.35*w)+x, int(0.05*h)+y)
+      #small_top = (x+int(0.65*w), y+int(0.25*h))
       self.update_users((x, y, w, h), small_bot, small_top)
       cv2.rectangle(frame, small_bot, small_top, (0, 255, 0), 2)
     return frame
@@ -113,14 +113,22 @@ class videoStream():
         self.draw_text(self.frame, str(key), rect_centre, 100)
         self.draw_text(self.frame, str(values['bpm']), (face_rect[0],face_rect[1]), face_rect[2])
         self.draw_text(self.frame, str(values['max_amp']), (face_rect[0]+face_rect[2], face_rect[1]+face_rect[3]), face_rect[2])
+        mean_hue, hsv_img = self.extract_mean_hue(cropped_rect)
         self.users[key]['frame'] = face_rect
-        self.users[key]['colour_hstry'] = self.update_colour_hstry(self.users[key]['colour_hstry'], self.extract_mean_hue(cropped_rect))
+        self.users[key]['colour_hstry'] = self.update_colour_hstry(self.users[key]['colour_hstry'], mean_hue)
+        self.users[key]['hsv_img'] = hsv_img
         self.users[key]['frames_since_update'] = 0
+        cv2.imshow(str(key), self.boost_image(hsv_img, values['max_amp']))
         return 0
 
     max_key = max(list(self.users.keys()))+1 if (len(self.users) != 0) else 0
-    self.users[max_key] = {'frame': face_rect, 'colour_hstry': [0 for _ in range(int(self.fps*5))], 'frames_since_update': 0, 'filtered_spectrum': [0 for _ in range(int(self.fps*5))], 'bpm': 'calculating bpm', 'max_amp': '-'}
+    self.users[max_key] = {'frame': face_rect, 'colour_hstry': [0 for _ in range(int(self.fps*5))], 'frames_since_update': 0, 'filtered_spectrum': [0 for _ in range(int(self.fps*5))], 'bpm': 'calculating bpm', 'max_amp': 0, 'hsv_img': None}
 
+  def boost_image(self, image, amp):
+     h, s, v = image[:, :, 0], image[:, :, 1], image[:, :, 2]
+     h = np.multiply(h, 1.2*(amp-10))
+     image[:, :, 0], image[:, :, 1], image[:, :, 2] = h ,s ,v
+     return image
   def age_users_dict(self):
     aged_users = []
     for key, values in self.users.copy().items():
@@ -146,7 +154,7 @@ class videoStream():
       if raw_signal[-1] != 0:
         face_centre = self.get_rect_centre(values['frame'])
         # filtered_signal, filtered_spectrum, coefs, freqs = filter_signal(np.array(raw_signal), self.fps)
-        filtered_signal = butter_bandpass_filter(np.array(raw_signal), 0.8, 2.5, self.fps, order=5)
+        filtered_signal = butter_bandpass_filter(np.array(raw_signal), 0.8, 2, self.fps, order=2)
         self.users[key]['bpm'], self.users[key]['max_amp'] = self.extract_heartbeat(np.fft.fft(filtered_signal), np.fft.fftfreq(filtered_signal.size, 1/self.fps))
         # self.users[key]['bpm'], self.users[key]['max_amp'] = self.extract_heartbeat(filtered_spectrum, freqs)
 
@@ -163,9 +171,10 @@ class videoStream():
 
   def extract_mean_hue(self, frame):
     hsv_img = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    hsv_img = cv2.medianBlur(hsv_img,9)   
+    kernel = np.ones((5,5), np.float32)/25
+    hsv_img = cv2.filter2D(hsv_img, -1, kernel)
     h, s, v = hsv_img[:, :, 0], hsv_img[:, :, 1], hsv_img[:, :, 2]
-    return np.mean(s)
+    return np.mean(h), hsv_img
 
 # def apply_bandpass(spectrum, sample_rate, high, low):
 #     n = spectrum.size
