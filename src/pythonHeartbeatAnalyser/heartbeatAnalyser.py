@@ -10,6 +10,7 @@ class videoStream():
     self.users = {}
     self.face_rects = []
     self.fps = self.video_stream.get(cv2.CAP_PROP_FPS)
+    self.time_window = self.fps * 3
 
     if DNN == "CAFFE":
         modelFile = "res10_300x300_ssd_iter_140000_fp16.caffemodel"
@@ -97,7 +98,7 @@ class videoStream():
     i = 0
     for face in faces:
       face_rect = self.face_rects[i]
-     #self.draw_text(frame, str(self.extract_mean_hue(face)), (face_rect[0],face_rect[1]), face_rect[2])
+     #self.draw_text(frame, str(self.extract_colour_signal(face)), (face_rect[0],face_rect[1]), face_rect[2])
       i += 1
 
   def get_rect_centre(self, rect):
@@ -112,22 +113,36 @@ class videoStream():
       if (values['frame'][0] < rect_centre[0] and rect_centre[0] < values['frame'][0]+values['frame'][2]) and (values['frame'][1] <rect_centre[1] and rect_centre[1] < values['frame'][1] + values['frame'][3]):
         self.draw_text(self.frame, str(key), rect_centre, 100)
         self.draw_text(self.frame, str(values['bpm']), (face_rect[0],face_rect[1]), face_rect[2])
-        self.draw_text(self.frame, str(values['max_amp']), (face_rect[0]+face_rect[2], face_rect[1]+face_rect[3]), face_rect[2])
-        mean_hue, hsv_img = self.extract_mean_hue(cropped_rect)
+        (b, g, r), hsv_img = self.extract_colour_signal(cropped_rect)
         self.users[key]['frame'] = face_rect
-        self.users[key]['colour_hstry'] = self.update_colour_hstry(self.users[key]['colour_hstry'], mean_hue)
+        self.users[key]['b'] = self.update_signal(self.users[key]['b'], b)
+        self.users[key]['g'] = self.update_signal(self.users[key]['g'], g)
+        self.users[key]['r'] = self.update_signal(self.users[key]['r'], r)
         self.users[key]['hsv_img'] = hsv_img
         self.users[key]['frames_since_update'] = 0
-        cv2.imshow(str(key), self.boost_image(hsv_img, values['max_amp']))
+        cv2.imshow(str(key), self.boost_image(hsv_img, values['filtered_signal']))
+
         return 0
 
     max_key = max(list(self.users.keys()))+1 if (len(self.users) != 0) else 0
-    self.users[max_key] = {'frame': face_rect, 'colour_hstry': [0 for _ in range(int(self.fps*5))], 'frames_since_update': 0, 'filtered_spectrum': [0 for _ in range(int(self.fps*5))], 'bpm': 'calculating bpm', 'max_amp': 0, 'hsv_img': None}
+    self.users[max_key] = {'frame': face_rect, 
+        'b':[0 for _ in range(int(self.time_window))], 
+        'g':[0 for _ in range(int(self.time_window))], 
+        'r':[0 for _ in range(int(self.time_window))], 
+        'frames_since_update': 0, 
+        'filtered_signal': [0 for _ in range(int(self.time_window))],
+        'raw_signal': [0 for _ in range(int(self.time_window))], 
+        'bpm': 'calculating bpm', 'hsv_img': None}
 
-  def boost_image(self, image, amp):
-     h, s, v = image[:, :, 0], image[:, :, 1], image[:, :, 2]
-     h = np.multiply(h, 1.2*(amp-10))
-     image[:, :, 0], image[:, :, 1], image[:, :, 2] = h ,s ,v
+  def boost_image(self, image, filtered_signal):
+
+     #max_amp = np.max(amp_signal)
+     b, g, r = image[:, :, 0], image[:, :, 1], image[:, :, 2]
+     b += 10*int(np.max(filtered_signal[0]))
+     g += 10*int(np.max(filtered_signal[1]))
+     r += 10*int(np.max(filtered_signal[2]))
+     image[:, :, 0], image[:, :, 1], image[:, :, 2] = b, g, r
+     #image *= 5
      return image
   def age_users_dict(self):
     aged_users = []
@@ -136,27 +151,28 @@ class videoStream():
       if self.users[key]['frames_since_update'] >= int(self.fps/2):
         aged_users.append(key)
     for key in aged_users:
+      cv2.destroyWindow(str(key))
       del self.users[key]
 
-  def update_colour_hstry(self, history, mean):
-    if history[int(self.fps*5)-1] == 0:
+  def update_signal(self, history, value):
+    if history[-1] == 0:
       index = history.index(0)
       history.remove(0)
-      history.insert(index, mean)
+      history.insert(index, value)
     else:
       history.pop(0)
-      history.append(mean)
+      history.append(value)
     return history
 
   def filter_user_signals(self):
     for key, values in self.users.copy().items():
-      raw_signal = self.users[key]['colour_hstry']
-      if raw_signal[-1] != 0:
+      raw_signal = (self.users[key]['b'], self.users[key]['g'], self.users[key]['r'])
+      if raw_signal[0][-1]!=0 and raw_signal[1][-1]!=0 and raw_signal[2][-1]!=0:
         face_centre = self.get_rect_centre(values['frame'])
-        # filtered_signal, filtered_spectrum, coefs, freqs = filter_signal(np.array(raw_signal), self.fps)
-        filtered_signal = butter_bandpass_filter(np.array(raw_signal), 0.8, 2, self.fps, order=2)
-        self.users[key]['bpm'], self.users[key]['max_amp'] = self.extract_heartbeat(np.fft.fft(filtered_signal), np.fft.fftfreq(filtered_signal.size, 1/self.fps))
-        # self.users[key]['bpm'], self.users[key]['max_amp'] = self.extract_heartbeat(filtered_spectrum, freqs)
+        filtered_signal = [butter_bandpass_filter(np.array(signal_channel), 0.8, 1.2, self.fps, order=2) for signal_channel in raw_signal]
+        self.users[key]['filtered_signal'] = filtered_signal
+        self.users[key]['raw_signal'] = raw_signal
+        self.users[key]['bpm'], max_amp = self.extract_heartbeat(np.fft.fft(filtered_signal[0]), np.fft.fftfreq(filtered_signal[0].size, 1/self.fps))
 
 
   def extract_heartbeat(self, spectrum, frequencies):
@@ -169,12 +185,13 @@ class videoStream():
     max_freq_bpm = max_freq_hz * 60
     return max_freq_bpm, max_amp
 
-  def extract_mean_hue(self, frame):
-    hsv_img = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+  def extract_colour_signal(self, frame):
     kernel = np.ones((5,5), np.float32)/25
-    hsv_img = cv2.filter2D(hsv_img, -1, kernel)
-    h, s, v = hsv_img[:, :, 0], hsv_img[:, :, 1], hsv_img[:, :, 2]
-    return np.mean(h), hsv_img
+    img = generate_laplacian_pyramid(frame, 5)
+    img = cv2.resize(img, (200,200))
+    b, g, r = img[:, :, 0], img[:, :, 1], img[:, :, 2]
+
+    return (np.mean(b), np.mean(g), np.mean(r)), img
 
 # def apply_bandpass(spectrum, sample_rate, high, low):
 #     n = spectrum.size
@@ -193,17 +210,39 @@ class videoStream():
 #     return filtered_signal, filtered_spectrum, coefs, freqs
 
 def butter_bandpass(lowcut, highcut, fs, order=5):
-    nyq = 0.5 * fs
-    low = lowcut / nyq
-    high = highcut / nyq
-    b, a = butter(order, [low, high], btype='band')
-    return b, a
+  nyq = 0.5 * fs
+  low = lowcut / nyq
+  high = highcut / nyq
+  b, a = butter(order, [low, high], btype='band')
+  return b, a
 
 
 def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
-    b, a = butter_bandpass(lowcut, highcut, fs, order=order)
-    y = lfilter(b, a, data)
-    return y
+  b, a = butter_bandpass(lowcut, highcut, fs, order=order)
+  y = lfilter(b, a, data)
+  return y
+
+def generate_gaussian_pyramid(image, levels):
+  g_pyr = [image]
+  for i in range(levels):
+    image = cv2.pyrDown(image)
+    g_pyr.append(image)
+
+  return g_pyr
+
+def generate_laplacian_pyramid(image, levels):
+  g_pyr = generate_gaussian_pyramid(image, levels)
+  l_pyr = [g_pyr[-1]]
+  for i in range(levels-1, 0 -1):
+    g_expanded = cv2.pyrUp(g_pyr(i))
+    g_expanded = spatial_lowpass(g_expanded)
+    lap = cv2.subtract(g_pyr[i-1], g_expanded)
+    l_pyr.append(lap)
+
+  return l_pyr[-1]
+
+def spatial_lowpass(image, kernel=np.ones((5,5), np.float32)/25):
+  return cv2.filter2D(image, -1, kernel)
 
 if __name__ == '__main__':
   stream = videoStream(0, 'TF')
