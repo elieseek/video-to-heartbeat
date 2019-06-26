@@ -1,6 +1,8 @@
 import numpy as np
-from scipy.signal import butter, lfilter
+from scipy.signal import butter, filtfilt
 import cv2
+
+import matplotlib.pyplot as plt
 
 class videoStream():
   def __init__(self, filepath, DNN):
@@ -10,7 +12,7 @@ class videoStream():
     self.users = {}
     self.face_rects = []
     self.fps = self.video_stream.get(cv2.CAP_PROP_FPS)
-    self.time_window = self.fps * 3
+    self.time_window = self.fps * 30
 
     if DNN == "CAFFE":
         modelFile = "res10_300x300_ssd_iter_140000_fp16.caffemodel"
@@ -23,6 +25,11 @@ class videoStream():
     self.open_video_stream()
 
   def open_video_stream(self):
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    plt.ion()
+    fig.show()
+    fig.canvas.draw()
     frame_count = 0
     while True:
       ret, self.frame = self.video_stream.read()
@@ -40,6 +47,10 @@ class videoStream():
       cv2.imshow('frame', self.frame)
 
       self.filter_user_signals()
+      ax.clear()
+      ax.plot(np.sum(self.users[0]['filtered_signal'], axis=0))
+      ax.plot(np.sum(self.users[0]['raw_signal'], axis=0)-np.mean(np.sum(self.users[0]['raw_signal'], axis=0)))
+      fig.canvas.draw()
 
       if cv2.waitKey(1) & 0xFF == ord('q'):
         break
@@ -130,7 +141,7 @@ class videoStream():
         'g':[0 for _ in range(int(self.time_window))], 
         'r':[0 for _ in range(int(self.time_window))], 
         'frames_since_update': 0, 
-        'filtered_signal': [0 for _ in range(int(self.time_window))],
+        'filtered_signal': [[0 for _ in range(int(self.time_window))] for i in range(3)],
         'raw_signal': [0 for _ in range(int(self.time_window))], 
         'bpm': 'calculating bpm', 'hsv_img': None}
 
@@ -138,9 +149,9 @@ class videoStream():
 
      #max_amp = np.max(amp_signal)
      b, g, r = image[:, :, 0], image[:, :, 1], image[:, :, 2]
-     b += 10*int(np.max(filtered_signal[0]))
-     g += 10*int(np.max(filtered_signal[1]))
-     r += 10*int(np.max(filtered_signal[2]))
+     b = b + 30*filtered_signal[0][-1]
+     g = g + 30*filtered_signal[1][-1]
+     r = r + 30*filtered_signal[2][-1]
      image[:, :, 0], image[:, :, 1], image[:, :, 2] = b, g, r
      #image *= 5
      return image
@@ -172,7 +183,8 @@ class videoStream():
         filtered_signal = [butter_bandpass_filter(np.array(signal_channel), 0.8, 1.2, self.fps, order=2) for signal_channel in raw_signal]
         self.users[key]['filtered_signal'] = filtered_signal
         self.users[key]['raw_signal'] = raw_signal
-        self.users[key]['bpm'], max_amp = self.extract_heartbeat(np.fft.fft(filtered_signal[0]), np.fft.fftfreq(filtered_signal[0].size, 1/self.fps))
+        concatted_signal = np.sum(filtered_signal, axis=0)
+        self.users[key]['bpm'], max_amp = self.extract_heartbeat(np.fft.fft(concatted_signal), np.fft.fftfreq(concatted_signal.size, 1/self.fps))
 
 
   def extract_heartbeat(self, spectrum, frequencies):
@@ -219,7 +231,7 @@ def butter_bandpass(lowcut, highcut, fs, order=5):
 
 def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
   b, a = butter_bandpass(lowcut, highcut, fs, order=order)
-  y = lfilter(b, a, data)
+  y = filtfilt(b, a, (data-np.mean(data)))
   return y
 
 def generate_gaussian_pyramid(image, levels):
