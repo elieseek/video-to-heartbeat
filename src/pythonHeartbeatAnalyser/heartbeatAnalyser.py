@@ -1,18 +1,28 @@
 import numpy as np
-from scipy.signal import butter, filtfilt
+from scipy.signal import butter, filtfilt, lfilter
 import cv2
 
 import matplotlib.pyplot as plt
 
 class videoStream():
   def __init__(self, filepath, DNN):
+    self.LOW_PASS = 1
+    self.HIGH_PASS = 1.5
+    self.BUTTER_ORDER = 3
+    self.NOISE_THRESHOLD = 1.5
+    self.LAPLACIAN_LAYERS = 4
+
     self.video_stream = cv2.VideoCapture(filepath)
     self.frame_width = self.video_stream.get(cv2.CAP_PROP_FRAME_WIDTH)
     self.frame_height = self.video_stream.get(cv2.CAP_PROP_FRAME_HEIGHT)
     self.users = {}
     self.face_rects = []
+    
     self.fps = self.video_stream.get(cv2.CAP_PROP_FPS)
-    self.time_window = self.fps * 30
+    self.time_window = self.fps * 7
+    self.noise_amp = 0
+    self.noise = [[0 for i in range(int(self.time_window))] for _ in range(3)]
+    self.filtered_noise = [[0 for i in range(int(self.time_window))] for _ in range(3)]
 
     if DNN == "CAFFE":
         modelFile = "res10_300x300_ssd_iter_140000_fp16.caffemodel"
@@ -35,7 +45,7 @@ class videoStream():
       ret, self.frame = self.video_stream.read()
       if self.frame is None:
         break
-
+      self.get_noise_amp()
       self.age_users_dict()
 
       self.face_rects = self.detect_faces(self.frame)
@@ -48,9 +58,12 @@ class videoStream():
 
       self.filter_user_signals()
       ax.clear()
-      ax.plot(np.sum(self.users[0]['filtered_signal'], axis=0))
-      ax.plot(np.sum(self.users[0]['raw_signal'], axis=0)-np.mean(np.sum(self.users[0]['raw_signal'], axis=0)))
-      fig.canvas.draw()
+      try:
+        ax.plot(100*self.users[0]['concatted_signal'])
+        ax.plot(np.sum(self.users[0]['raw_signal'], axis=0))
+        fig.canvas.draw()
+      except KeyError:
+        pass
 
       if cv2.waitKey(1) & 0xFF == ord('q'):
         break
@@ -131,7 +144,7 @@ class videoStream():
         self.users[key]['r'] = self.update_signal(self.users[key]['r'], r)
         self.users[key]['hsv_img'] = hsv_img
         self.users[key]['frames_since_update'] = 0
-        cv2.imshow(str(key), self.boost_image(hsv_img, values['filtered_signal']))
+        cv2.imshow(str(key), self.boost_image(hsv_img, values['concatted_signal']))
 
         return 0
 
@@ -143,18 +156,17 @@ class videoStream():
         'frames_since_update': 0, 
         'filtered_signal': [[0 for _ in range(int(self.time_window))] for i in range(3)],
         'raw_signal': [0 for _ in range(int(self.time_window))], 
+        'concatted_signal': [0 for _ in range(int(self.time_window))],
         'bpm': 'calculating bpm', 'hsv_img': None}
 
   def boost_image(self, image, filtered_signal):
-
-     #max_amp = np.max(amp_signal)
      b, g, r = image[:, :, 0], image[:, :, 1], image[:, :, 2]
-     b = b + 30*filtered_signal[0][-1]
-     g = g + 30*filtered_signal[1][-1]
-     r = r + 30*filtered_signal[2][-1]
+     b = b + 30*filtered_signal[-1]
+     g = g + 30*filtered_signal[-1]
+     r = r + 30*filtered_signal[-1]
      image[:, :, 0], image[:, :, 1], image[:, :, 2] = b, g, r
-     #image *= 5
      return image
+
   def age_users_dict(self):
     aged_users = []
     for key, values in self.users.copy().items():
@@ -180,14 +192,26 @@ class videoStream():
       raw_signal = (self.users[key]['b'], self.users[key]['g'], self.users[key]['r'])
       if raw_signal[0][-1]!=0 and raw_signal[1][-1]!=0 and raw_signal[2][-1]!=0:
         face_centre = self.get_rect_centre(values['frame'])
-        filtered_signal = [butter_bandpass_filter(np.array(signal_channel), 0.8, 1.2, self.fps, order=2) for signal_channel in raw_signal]
+        filtered_signal = [butter_bandpass_filter(np.array(signal_channel), self.LOW_PASS, self.HIGH_PASS, self.fps, order=self.BUTTER_ORDER) for signal_channel in raw_signal]
         self.users[key]['filtered_signal'] = filtered_signal
         self.users[key]['raw_signal'] = raw_signal
-        concatted_signal = np.sum(filtered_signal, axis=0)
-        self.users[key]['bpm'], max_amp = self.extract_heartbeat(np.fft.fft(concatted_signal), np.fft.fftfreq(concatted_signal.size, 1/self.fps))
+        self.users[key]['concatted_signal'] =  self.eliminate_low_freq_noise(np.sum(filtered_signal, axis=0))
+        self.users[key]['bpm'], max_amp = self.extract_heartbeat(self.users[key]['concatted_signal'])
 
+  def get_noise_amp(self):
+    sample = self.frame[1:5,1:5]
+    sample_signal, _ = self.extract_colour_signal(sample)
+    self.noise[0] = self.update_signal(self.noise[0], sample_signal[0])
+    self.noise[1] = self.update_signal(self.noise[1], sample_signal[1])
+    self.noise[2] = self.update_signal(self.noise[2], sample_signal[2])
+    self.filtered_noise = [butter_bandpass_filter(np.array(signal_channel), self.LOW_PASS, self.HIGH_PASS, self.fps, order=self.BUTTER_ORDER) for signal_channel in self.noise]
+    noise_signal = np.sum(self.filtered_noise, axis=0)
+    _, max_amp = self.extract_heartbeat(noise_signal, noise=True)
+    self.noise_amp = max_amp
 
-  def extract_heartbeat(self, spectrum, frequencies):
+  def extract_heartbeat(self, signal, noise=False):
+    spectrum = np.fft.fft(signal)
+    frequencies = np.fft.fftfreq(signal.size, 1/self.fps)
     max_index = np.abs(np.argmax(np.abs(spectrum)))
 
     max_freq = np.abs(frequencies[max_index])
@@ -197,9 +221,19 @@ class videoStream():
     max_freq_bpm = max_freq_hz * 60
     return max_freq_bpm, max_amp
 
+  def cutoff_low_amp(self, spectrum, threshold):
+    threshold_indices = np.abs(spectrum) < self.NOISE_THRESHOLD*self.noise_amp
+    spectrum[threshold_indices] = 0
+    return spectrum
+
+  def eliminate_low_freq_noise(self, signal):
+    spectrum, frequencies = np.fft.fft(signal), np.fft.fftfreq(signal.size, 1/self.fps)
+    spectrum = self.cutoff_low_amp(spectrum, self.noise_amp)
+    signal = np.fft.ifft(spectrum, signal.size)
+    return signal
+
   def extract_colour_signal(self, frame):
-    kernel = np.ones((5,5), np.float32)/25
-    img = generate_laplacian_pyramid(frame, 5)
+    img = generate_laplacian_pyramid(frame, self.LAPLACIAN_LAYERS)
     img = cv2.resize(img, (200,200))
     b, g, r = img[:, :, 0], img[:, :, 1], img[:, :, 2]
 
@@ -231,7 +265,8 @@ def butter_bandpass(lowcut, highcut, fs, order=5):
 
 def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
   b, a = butter_bandpass(lowcut, highcut, fs, order=order)
-  y = filtfilt(b, a, (data-np.mean(data)))
+  y = lfilter(b, a, (data-np.mean(data)))
+  #y = filtfilt(b, a, (data-np.mean(data)))
   return y
 
 def generate_gaussian_pyramid(image, levels):
@@ -253,8 +288,9 @@ def generate_laplacian_pyramid(image, levels):
 
   return l_pyr[-1]
 
-def spatial_lowpass(image, kernel=np.ones((5,5), np.float32)/25):
+def spatial_lowpass(image, kernel=np.ones((25,25), np.float32)/625):
   return cv2.filter2D(image, -1, kernel)
 
+
 if __name__ == '__main__':
-  stream = videoStream(0, 'TF')
+  stream = videoStream(0, 'CAFFE')
