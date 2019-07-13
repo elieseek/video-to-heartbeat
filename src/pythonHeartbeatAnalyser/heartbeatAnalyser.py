@@ -11,6 +11,8 @@ class videoStream():
     self.BUTTER_ORDER = 3
     self.NOISE_THRESHOLD = 1.5
     self.LAPLACIAN_LAYERS = 4
+    self.PLOT_USER = True
+    self.WINDOW_SECONDS = 3
 
     self.video_stream = cv2.VideoCapture(filepath)
     self.frame_width = self.video_stream.get(cv2.CAP_PROP_FRAME_WIDTH)
@@ -19,7 +21,7 @@ class videoStream():
     self.face_rects = []
     
     self.fps = self.video_stream.get(cv2.CAP_PROP_FPS)
-    self.time_window = self.fps * 7
+    self.time_window = self.fps * self.WINDOW_SECONDS
     self.noise_amp = 0
     self.noise = [[0 for i in range(int(self.time_window))] for _ in range(3)]
     self.filtered_noise = [[0 for i in range(int(self.time_window))] for _ in range(3)]
@@ -35,11 +37,7 @@ class videoStream():
     self.open_video_stream()
 
   def open_video_stream(self):
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
-    plt.ion()
-    fig.show()
-    fig.canvas.draw()
+    if self.PLOT_USER: fig, ax = self.initialise_plot()
     frame_count = 0
     while True:
       ret, self.frame = self.video_stream.read()
@@ -52,18 +50,11 @@ class videoStream():
       if len(self.face_rects) > 0:
         cropped_faces = self.crop_faces(self.frame, self.face_rects)
         self.frame = self.draw_face_rects(self.frame, self.face_rects)
-        self.analyse_faces(self.frame, cropped_faces)
       self.draw_text(self.frame, str(frame_count), (100,100), 100)
       cv2.imshow('frame', self.frame)
 
       self.filter_user_signals()
-      ax.clear()
-      try:
-        ax.plot(100*self.users[0]['concatted_signal'])
-        ax.plot(np.sum(self.users[0]['raw_signal'], axis=0))
-        fig.canvas.draw()
-      except KeyError:
-        pass
+      if self.PLOT_USER: fig, ax = self.update_plot(fig, ax)
 
       if cv2.waitKey(1) & 0xFF == ord('q'):
         break
@@ -117,13 +108,6 @@ class videoStream():
       (255,255,255),
       2
     )
-
-  def analyse_faces(self, frame, faces):
-    i = 0
-    for face in faces:
-      face_rect = self.face_rects[i]
-     #self.draw_text(frame, str(self.extract_colour_signal(face)), (face_rect[0],face_rect[1]), face_rect[2])
-      i += 1
 
   def get_rect_centre(self, rect):
     return (int((2*rect[0]+rect[2])/2), int((2*rect[1]+rect[3])/2))
@@ -238,6 +222,23 @@ class videoStream():
     b, g, r = img[:, :, 0], img[:, :, 1], img[:, :, 2]
 
     return (np.mean(b), np.mean(g), np.mean(r)), img
+
+  def initialise_plot(self):
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    plt.ion()
+    fig.show()
+    fig.canvas.draw()
+    return fig, ax
+
+  def update_plot(self, fig, ax):
+    ax.clear()
+    if 0 in self.users.keys():
+      ax.plot(100*self.users[0]['concatted_signal'])
+      ax.plot(np.sum(self.users[0]['raw_signal'], axis=0))
+      fig.canvas.draw()
+    return fig, ax
+
 
 # def apply_bandpass(spectrum, sample_rate, high, low):
 #     n = spectrum.size
